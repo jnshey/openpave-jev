@@ -161,6 +161,43 @@ test('epm provider: falls back to JEV_API_KEY when PAVE_EPM_TOKEN_FILE is not se
   }
 });
 
+test('typesafe provider: sends the model field (TypeSafe API 422s without it)', async () => {
+  const http = require('http');
+  const seen = [];
+  const server = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, body: JSON.parse(body) });
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ answers: { q1: { type: 'noul', noul: 0.9, confidence: 0.9 } }, usage: { input_tokens: 5 } }));
+      });
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const savedKey = process.env.JEV_API_KEY;
+  const savedModel = process.env.JEV_MODEL;
+  try {
+    process.env.JEV_API_KEY = 'ts-key';
+    delete process.env.JEV_MODEL;
+    const provider = drivers.resolveProvider('typesafe');
+    await provider.ask({ text: 'hello' }, { q1: { type: 'noul' } }, { baseUrl: base });
+    assert.strictEqual(seen[0].url, '/v1/systemone', 'typesafe posts to /v1/systemone');
+    assert.strictEqual(seen[0].auth, 'Bearer ts-key');
+    assert.strictEqual(seen[0].body.model, 'cnrai/laya-english', 'default model is sent (422 without it)');
+    seen.length = 0;
+    process.env.JEV_MODEL = 'cnrai/laya-multilingual';
+    await provider.ask({ text: 'hello' }, { q1: { type: 'noul' } }, { baseUrl: base });
+    assert.strictEqual(seen[0].body.model, 'cnrai/laya-multilingual', 'JEV_MODEL overrides the default');
+  } finally {
+    if (savedKey === undefined) delete process.env.JEV_API_KEY; else process.env.JEV_API_KEY = savedKey;
+    if (savedModel === undefined) delete process.env.JEV_MODEL; else process.env.JEV_MODEL = savedModel;
+    await new Promise((resolve) => { if (server.closeAllConnections) server.closeAllConnections(); server.close(() => resolve()); });
+  }
+});
+
 test('epm provider: strips the sidecar /pave/v1 (or /v1) suffix from the base URL', async () => {
   const http = require('http');
   const seen = [];
